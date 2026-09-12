@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>50m間隔ルートプロッター（詳細指定版）</title>
+    <title>50m間隔ルートプロッター（保存機能付き）</title>
     <!-- Turf.js (空間計算用ライブラリ) -->
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
     <style>
@@ -12,8 +12,11 @@
         .input-group { display: flex; flex-direction: column; gap: 5px; }
         input[type="text"], textarea { padding: 5px; width: 250px; font-size: 14px; }
         textarea { height: 60px; resize: vertical; }
-        button { padding: 8px 15px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; }
+        button { padding: 8px 15px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; font-weight: bold; }
         button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
         #click-mode { background: #e9ecef; padding: 10px; border-radius: 5px; border: 1px solid #ccc; }
         #map { flex-grow: 1; width: 100%; border: 1px solid #ccc; min-height: 300px; }
         #result-box { height: 150px; overflow-y: scroll; background: #222; color: #0f0; padding: 10px; font-family: monospace; font-size: 12px; margin-top: 10px; }
@@ -53,8 +56,10 @@
             <label><input type="radio" name="click-target" value="destination"> 目的地にセット</label>
         </div>
 
-        <div class="input-group" style="justify-content: flex-end;">
-            <button onclick="calculateAndPlotRoute()">ルート検索＆50mプロット</button>
+        <div class="input-group" style="justify-content: flex-end; flex-direction: row; align-items: flex-end; gap: 10px;">
+            <button onclick="calculateAndPlotRoute()">ルート検索＆プロット</button>
+            <!-- ダウンロードボタン（初期状態は無効化） -->
+            <button id="download-btn" class="btn-success" onclick="downloadTxt()" disabled>TXTで保存</button>
         </div>
     </div>
 
@@ -69,6 +74,7 @@
         let directionsService;
         let directionsRenderer;
         let markers = [];
+        let calculatedCoords = []; // ダウンロード用に座標を保持する配列
 
         function initMap() {
             map = new google.maps.Map(document.getElementById("map"), {
@@ -81,7 +87,6 @@
                 suppressMarkers: true
             });
 
-            // 地図をクリックした時のイベントリスナー
             map.addListener("click", (e) => {
                 const latLngStr = `${e.latLng.lat().toFixed(6)}, ${e.latLng.lng().toFixed(6)}`;
                 const target = document.querySelector('input[name="click-target"]:checked').value;
@@ -107,28 +112,27 @@
             const waypointsText = document.getElementById("waypoints").value;
             const travelMode = document.getElementById("travel-mode").value;
             const resultBox = document.getElementById("result-box");
+            const downloadBtn = document.getElementById("download-btn");
 
             if (!origin || !destination) {
                 alert("出発地と目的地を入力してください。");
                 return;
             }
 
-            // 経由地の配列を作成
             const waypoints = [];
             if (waypointsText.trim() !== "") {
                 const lines = waypointsText.split("\n");
                 lines.forEach(line => {
                     if (line.trim() !== "") {
-                        waypoints.push({
-                            location: line.trim(),
-                            stopover: true // 経由地として立ち寄る
-                        });
+                        waypoints.push({ location: line.trim(), stopover: true });
                     }
                 });
             }
 
             resultBox.innerHTML = "計算中...<br>";
             clearMarkers();
+            calculatedCoords = []; // 配列をリセット
+            downloadBtn.disabled = true; // ダウンロードボタンを無効化
 
             const request = {
                 origin: origin,
@@ -144,7 +148,6 @@
                     const route = response.routes[0];
                     const pathCoordinates = [];
                     
-                    // 経由地がある場合、複数のleg（区間）に分かれるため、すべてループで結合する
                     route.legs.forEach(leg => {
                         leg.steps.forEach(step => {
                             step.path.forEach(latLng => {
@@ -168,21 +171,19 @@
                             position: { lat: lat, lng: lng },
                             map: map,
                             title: `${dist}m地点`,
-                            icon: {
-                                path: google.maps.SymbolPath.CIRCLE,
-                                scale: 4,
-                                fillColor: "#FF0000",
-                                fillOpacity: 1,
-                                strokeWeight: 1,
-                                strokeColor: "#FFF"
-                            }
+                            icon: { path: google.maps.SymbolPath.CIRCLE, scale: 4, fillColor: "#FF0000", fillOpacity: 1, strokeWeight: 1, strokeColor: "#FFF" }
                         });
                         markers.push(marker);
 
+                        // 画面表示用のテキスト
                         outputHtml += `${dist}m地点: 緯度 ${lat.toFixed(6)}, 経度 ${lng.toFixed(6)}<br>`;
+                        
+                        // ダウンロード用の配列に「緯度,経度」の形式で追加
+                        calculatedCoords.push(`${lat.toFixed(6)},${lng.toFixed(6)}`);
                     }
 
                     resultBox.innerHTML = outputHtml;
+                    downloadBtn.disabled = false; // 計算完了後にボタンを有効化
 
                 } else {
                     window.alert("ルートの取得に失敗しました: " + status);
@@ -190,11 +191,36 @@
             });
         }
 
+        // TXTファイルとしてダウンロードする関数
+        function downloadTxt() {
+            if (calculatedCoords.length === 0) return;
+
+            // 配列のデータを改行でつないで1つのテキストにする
+            const textContent = calculatedCoords.join("\n");
+
+            // テキストデータをBlob（ファイルオブジェクト）に変換
+            const blob = new Blob([textContent], { type: "text/plain" });
+
+            // ダウンロード用の仮のリンク要素を作成
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = "route_coordinates.txt"; // ダウンロード時のファイル名
+
+            // リンクをプログラムからクリックしてダウンロードを発火
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            // メモリ解放
+            URL.revokeObjectURL(link.href);
+        }
+
         function clearMarkers() {
             markers.forEach(marker => marker.setMap(null));
             markers = [];
         }
     </script>
-    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBKUH6Z-ygwUY5MaBC0ukNpwgiEQWQjkXY&callback=initMap"></script>
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBKUH6Z-ygwUY5MaBC0ukNpwgiEQWQjkXY
+&callback=initMap"></script>
 </body>
 </html>
