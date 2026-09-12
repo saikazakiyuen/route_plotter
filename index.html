@@ -3,15 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>任意間隔ルートプロッター（経由地注記付き）</title>
+    <title>任意間隔ルートプロッター（間引き機能付き）</title>
     <!-- Turf.js (空間計算用ライブラリ) -->
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; padding: 10px; display: flex; flex-direction: column; height: 100vh; }
-        #controls { margin-bottom: 10px; padding: 15px; background: #f4f4f4; border-radius: 5px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
-        .input-group { display: flex; flex-direction: column; gap: 5px; }
-        input[type="text"], textarea { padding: 5px; width: 220px; font-size: 14px; }
-        textarea { height: 60px; resize: vertical; }
+        #controls { margin-bottom: 10px; padding: 15px; background: #f4f4f4; border-radius: 5px; display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-start; }
+        .input-group { display: flex; flex-direction: column; gap: 5px; border-right: 1px solid #ddd; padding-right: 15px; }
+        .input-group:last-child { border-right: none; }
+        input[type="text"], textarea { padding: 5px; width: 200px; font-size: 14px; }
+        textarea { height: 40px; resize: vertical; }
         button { padding: 8px 15px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; font-weight: bold; }
         button:hover { background: #0056b3; }
         button:disabled { background: #ccc; cursor: not-allowed; }
@@ -26,33 +27,20 @@
 
     <div id="controls">
         <div class="input-group">
-            <label>出発地 (地名 or 緯度,経度):</label>
-            <input type="text" id="origin" placeholder="例: 35.6812, 139.7671">
-        </div>
-        
-        <div class="input-group">
-            <label>経由地 (改行で複数指定可):</label>
-            <textarea id="waypoints" placeholder="この道路を通したい場合、その上の地点を指定"></textarea>
+            <label>出発・経由・目的地:</label>
+            <input type="text" id="origin" placeholder="出発地 (例: 35.68, 139.76)">
+            <textarea id="waypoints" placeholder="経由地 (改行で複数可)"></textarea>
+            <input type="text" id="destination" placeholder="目的地 (例: 皇居)">
         </div>
 
         <div class="input-group">
-            <label>目的地 (地名 or 緯度,経度):</label>
-            <input type="text" id="destination" placeholder="例: 皇居">
-        </div>
-
-        <div class="input-group">
-            <label>移動手段:</label>
+            <label>基本設定:</label>
             <select id="travel-mode" style="padding: 5px;">
                 <option value="WALKING">徒歩</option>
                 <option value="DRIVING">自動車</option>
                 <option value="BICYCLING">自転車</option>
             </select>
-        </div>
-
-        <!-- プロット間隔の指定UIを追加 -->
-        <div class="input-group">
-            <label>プロット間隔:</label>
-            <div style="display: flex; gap: 5px; align-items: center;">
+            <div style="display: flex; gap: 5px; align-items: center; margin-top: 10px;">
                 <select id="interval-select" style="padding: 5px;" onchange="toggleCustomInterval()">
                     <option value="50">50mおき</option>
                     <option value="100">100mおき</option>
@@ -63,14 +51,23 @@
             </div>
         </div>
 
-        <div id="click-mode" class="input-group">
-            <strong>📍地図クリックで入力:</strong>
-            <label><input type="radio" name="click-target" value="origin" checked> 出発地にセット</label>
-            <label><input type="radio" name="click-target" value="waypoints"> 経由地に追加</label>
-            <label><input type="radio" name="click-target" value="destination"> 目的地にセット</label>
+        <div class="input-group" style="background: #e3f2fd; padding: 10px; border-radius: 5px;">
+            <label style="font-weight: bold; color: #0056b3;">高度な処理 (間引き):</label>
+            <label><input type="checkbox" id="enable-simplify"> ほぼ直線の点を間引く</label>
+            <div style="display: flex; align-items: center; gap: 5px; margin-top: 5px;">
+                <span>直線とみなす角度:</span>
+                <input type="number" id="simplify-angle" value="165" style="width: 60px;"> 度以上
+            </div>
         </div>
 
-        <div class="input-group" style="justify-content: flex-end; flex-direction: row; align-items: flex-end; gap: 10px;">
+        <div id="click-mode" class="input-group">
+            <strong>📍地図クリック入力:</strong>
+            <label><input type="radio" name="click-target" value="origin" checked> 出発地</label>
+            <label><input type="radio" name="click-target" value="waypoints"> 経由地に追加</label>
+            <label><input type="radio" name="click-target" value="destination"> 目的地</label>
+        </div>
+
+        <div class="input-group" style="border: none; justify-content: flex-end; gap: 10px;">
             <button onclick="calculateAndPlotRoute()">ルート計算＆プロット</button>
             <button id="download-btn" class="btn-success" onclick="downloadTxt()" disabled>TXTで保存</button>
         </div>
@@ -79,7 +76,7 @@
     <div id="map"></div>
     
     <div id="result-box">
-        ここに指定間隔ごとの緯度経度が出力されます...<br>
+        ここに処理後の緯度経度が出力されます...<br>
     </div>
 
     <script>
@@ -103,18 +100,11 @@
             map.addListener("click", (e) => {
                 const latLngStr = `${e.latLng.lat().toFixed(6)}, ${e.latLng.lng().toFixed(6)}`;
                 const target = document.querySelector('input[name="click-target"]:checked').value;
-                
-                if (target === "origin") {
-                    document.getElementById("origin").value = latLngStr;
-                } else if (target === "destination") {
-                    document.getElementById("destination").value = latLngStr;
-                } else if (target === "waypoints") {
+                if (target === "origin") document.getElementById("origin").value = latLngStr;
+                else if (target === "destination") document.getElementById("destination").value = latLngStr;
+                else if (target === "waypoints") {
                     const wpElem = document.getElementById("waypoints");
-                    if (wpElem.value === "") {
-                        wpElem.value = latLngStr;
-                    } else {
-                        wpElem.value += "\n" + latLngStr;
-                    }
+                    wpElem.value = wpElem.value ? wpElem.value + "\n" + latLngStr : latLngStr;
                 }
             });
         }
@@ -122,19 +112,28 @@
         function toggleCustomInterval() {
             const select = document.getElementById("interval-select");
             const customInput = document.getElementById("custom-interval");
-            if (select.value === "custom") {
-                customInput.style.display = "block";
-            } else {
-                customInput.style.display = "none";
-            }
+            customInput.style.display = select.value === "custom" ? "block" : "none";
         }
 
         function getIntervalValue() {
             const select = document.getElementById("interval-select").value;
-            if (select === "custom") {
-                return parseFloat(document.getElementById("custom-interval").value);
+            return select === "custom" ? parseFloat(document.getElementById("custom-interval").value) : parseFloat(select);
+        }
+
+        // 3点間の内角を計算する関数 (A:前回の保存点, B:現在の判定点, C:次の点)
+        function calculateAngle(ptA, ptB, ptC) {
+            const pA = turf.point([ptA.lng, ptA.lat]);
+            const pB = turf.point([ptB.lng, ptB.lat]);
+            const pC = turf.point([ptC.lng, ptC.lat]);
+
+            const bearingBA = turf.bearing(pB, pA); // Bから見たAの方向（-180〜180）
+            const bearingBC = turf.bearing(pB, pC); // Bから見たCの方向（-180〜180）
+            
+            let angle = Math.abs(bearingBA - bearingBC);
+            if (angle > 180) {
+                angle = 360 - angle;
             }
-            return parseFloat(select);
+            return angle; // 0〜180度の内角を返す
         }
 
         function calculateAndPlotRoute() {
@@ -142,132 +141,121 @@
             const destination = document.getElementById("destination").value;
             const waypointsText = document.getElementById("waypoints").value;
             const travelMode = document.getElementById("travel-mode").value;
+            const interval = getIntervalValue();
+            
+            // 間引き設定の取得
+            const enableSimplify = document.getElementById("enable-simplify").checked;
+            const simplifyAngle = parseFloat(document.getElementById("simplify-angle").value);
+
             const resultBox = document.getElementById("result-box");
             const downloadBtn = document.getElementById("download-btn");
-            const interval = getIntervalValue();
 
-            if (!origin || !destination) {
-                alert("出発地と目的地を入力してください。");
-                return;
-            }
-            if (!interval || interval <= 0) {
-                alert("正しいプロット間隔を入力してください。");
-                return;
-            }
+            if (!origin || !destination) { alert("出発地と目的地を入力してください。"); return; }
+            if (!interval || interval <= 0) { alert("正しい間隔を入力してください。"); return; }
 
-            const waypoints = [];
-            if (waypointsText.trim() !== "") {
-                const lines = waypointsText.split("\n");
-                lines.forEach(line => {
-                    if (line.trim() !== "") {
-                        waypoints.push({ location: line.trim(), stopover: true });
-                    }
-                });
-            }
+            const waypoints = waypointsText.split("\n").filter(l => l.trim() !== "").map(l => ({ location: l.trim(), stopover: true }));
 
             resultBox.innerHTML = "計算中...<br>";
             clearMarkers();
             calculatedCoords = []; 
             downloadBtn.disabled = true; 
 
-            const request = {
+            directionsService.route({
                 origin: origin,
                 destination: destination,
                 waypoints: waypoints,
                 travelMode: google.maps.TravelMode[travelMode]
-            };
-
-            directionsService.route(request, (response, status) => {
+            }, (response, status) => {
                 if (status === "OK") {
                     directionsRenderer.setDirections(response);
                     
                     const route = response.routes[0];
                     let accumulatedCoords = [];
-                    const keyPoints = []; // 始点・経由地・終点を保持する配列
+                    const keyPoints = [];
 
-                    // [始点] を追加
+                    // [始点]
                     const startLoc = route.legs[0].start_location;
-                    keyPoints.push({
-                        dist: 0,
-                        lat: startLoc.lat(),
-                        lng: startLoc.lng(),
-                        label: '※始点'
-                    });
+                    keyPoints.push({ dist: 0, lat: startLoc.lat(), lng: startLoc.lng(), label: '※始点' });
 
-                    // 各区間（Leg）の処理
+                    // 各区間
                     route.legs.forEach((leg, index) => {
-                        leg.steps.forEach(step => {
-                            step.path.forEach(latLng => {
-                                accumulatedCoords.push([latLng.lng(), latLng.lat()]);
-                            });
-                        });
-
-                        // ここまでのルートの距離を計算（経由地・終点の距離位置を特定するため）
+                        leg.steps.forEach(step => step.path.forEach(latLng => accumulatedCoords.push([latLng.lng(), latLng.lat()])));
                         const lineUpToHere = turf.lineString(accumulatedCoords);
                         const distUpToHere = turf.length(lineUpToHere, {units: 'meters'});
-                        
-                        // ラベルの設定（最後なら終点、それ以外は経由地）
                         const labelText = (index === route.legs.length - 1) ? '※終点' : `※経由地${index + 1}`;
-                        const endLoc = leg.end_location;
-                        
-                        keyPoints.push({
-                            dist: distUpToHere,
-                            lat: endLoc.lat(),
-                            lng: endLoc.lng(),
-                            label: labelText
-                        });
+                        keyPoints.push({ dist: distUpToHere, lat: leg.end_location.lat(), lng: leg.end_location.lng(), label: labelText });
                     });
 
-                    // 全体のルート線をTurf.js用に生成
                     const fullLine = turf.lineString(accumulatedCoords);
                     const totalDistance = turf.length(fullLine, {units: 'meters'});
                     let outputPoints = [];
 
-                    // 【1】重要なポイント（始点・経由地・終点）を出力配列に追加
+                    // 重要ポイントの追加
                     keyPoints.forEach(kp => outputPoints.push(kp));
 
-                    // 【2】指定間隔（50m等）のポイントを出力配列に追加
+                    // 指定間隔のポイントの追加
                     for (let d = interval; d < totalDistance; d += interval) {
-                        // 重要なポイントと位置が完全に被った場合は重複を避ける
-                        const isDuplicate = keyPoints.some(kp => Math.abs(kp.dist - d) < 0.1);
-                        if (!isDuplicate) {
+                        if (!keyPoints.some(kp => Math.abs(kp.dist - d) < 0.1)) {
                             const point = turf.along(fullLine, d, {units: 'meters'});
-                            outputPoints.push({
-                                dist: d,
-                                lat: point.geometry.coordinates[1],
-                                lng: point.geometry.coordinates[0],
-                                label: ''
-                            });
+                            outputPoints.push({ dist: d, lat: point.geometry.coordinates[1], lng: point.geometry.coordinates[0], label: '' });
                         }
                     }
 
-                    // 【3】距離順（ルート順）に並び替える
+                    // 距離順（ルート順）に並び替え
                     outputPoints.sort((a, b) => a.dist - b.dist);
 
+                    // ==========================================
+                    // 【高度な処理】直線の間引き（ONの場合のみ実行）
+                    // ==========================================
+                    if (enableSimplify && outputPoints.length > 2) {
+                        let simplifiedPoints = [];
+                        simplifiedPoints.push(outputPoints[0]); // 始点は確定で保存
+                        let lastSavedIndex = 0; // 最後に保存した点のインデックス
+
+                        for (let i = 1; i < outputPoints.length - 1; i++) {
+                            const currentPoint = outputPoints[i];
+                            const nextPoint = outputPoints[i + 1];
+
+                            // 重要な点（ラベルあり）は絶対に間引かない
+                            if (currentPoint.label) {
+                                simplifiedPoints.push(currentPoint);
+                                lastSavedIndex = i;
+                                continue;
+                            }
+
+                            // 直前の保存点(A), 現在の点(B), 次の点(C) で内角を計算
+                            const angle = calculateAngle(outputPoints[lastSavedIndex], currentPoint, nextPoint);
+
+                            // 角度がしきい値未満（＝曲がっている）場合は現在の点を保存する
+                            if (angle < simplifyAngle) {
+                                simplifiedPoints.push(currentPoint);
+                                lastSavedIndex = i;
+                            }
+                        }
+                        simplifiedPoints.push(outputPoints[outputPoints.length - 1]); // 終点は確定で保存
+                        outputPoints = simplifiedPoints; // 配列を上書き
+                    }
+                    // ==========================================
+
                     // 描画とデータ出力
-                    let outputHtml = `総距離: ${Math.round(totalDistance)} メートル\n\n`;
+                    let outputHtml = `総距離: ${Math.round(totalDistance)} メートル (プロット数: ${outputPoints.length}点)\n\n`;
 
                     outputPoints.forEach(pt => {
                         const latStr = pt.lat.toFixed(6);
                         const lngStr = pt.lng.toFixed(6);
-                        // ラベルがある場合はスペースを空けて追加
                         const labelStr = pt.label ? ` ${pt.label}` : ''; 
                         
-                        // 画面表示用
                         outputHtml += `${Math.round(pt.dist)}m地点: ${latStr}, ${lngStr}${labelStr}\n`;
-                        
-                        // ダウンロード用（ご指定のフォーマット）
                         calculatedCoords.push(`${latStr}, ${lngStr}${labelStr}`);
 
-                        // マーカーの設定（ラベル付きの重要な点は青色で大きく、等間隔の点は赤色で小さく）
                         const iconColor = pt.label ? "#0000FF" : "#FF0000";
                         const iconScale = pt.label ? 6 : 4;
-                        const zIndex = pt.label ? 100 : 1; // 重要な点が手前に来るように
+                        const zIndex = pt.label ? 100 : 1;
 
                         const marker = new google.maps.Marker({
                             position: { lat: pt.lat, lng: pt.lng },
                             map: map,
-                            title: pt.label ? pt.label : `${Math.round(pt.dist)}m地点`,
+                            title: pt.label ? pt.label : `${Math.round(pt.dist)}m地点 (角度クリア)`,
                             zIndex: zIndex,
                             icon: { path: google.maps.SymbolPath.CIRCLE, scale: iconScale, fillColor: iconColor, fillOpacity: 1, strokeWeight: 1, strokeColor: "#FFF" }
                         });
