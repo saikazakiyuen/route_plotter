@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>50m間隔ルートプロッター</title>
+    <!-- Turf.js (空間計算用ライブラリ) -->
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 10px; display: flex; flex-direction: column; height: 100vh; }
+        #controls { margin-bottom: 10px; padding: 10px; background: #f4f4f4; border-radius: 5px; }
+        #controls input, #controls select { padding: 5px; margin-right: 10px; }
+        #controls button { padding: 5px 15px; cursor: pointer; }
+        #map { flex-grow: 1; width: 100%; border: 1px solid #ccc; }
+        #result-box { height: 150px; overflow-y: scroll; background: #222; color: #0f0; padding: 10px; font-family: monospace; font-size: 12px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <label>出発地: <input type="text" id="origin" value="東京駅"></label>
+        <label>目的地: <input type="text" id="destination" value="皇居"></label>
+        <label>移動手段: 
+            <select id="travel-mode">
+                <option value="WALKING">徒歩</option>
+                <option value="DRIVING">自動車</option>
+            </select>
+        </label>
+        <button onclick="calculateAndPlotRoute()">ルート検索＆50mプロット</button>
+    </div>
+
+    <div id="map"></div>
+    
+    <div id="result-box">
+        ここに50mごとの緯度経度が出力されます...<br>
+    </div>
+
+    <script>
+        let map;
+        let directionsService;
+        let directionsRenderer;
+        let markers = []; // プロットしたピンを管理する配列
+
+        // 地図の初期化（Google Maps API読み込み後に呼ばれる）
+        function initMap() {
+            map = new google.maps.Map(document.getElementById("map"), {
+                center: { lat: 35.681236, lng: 139.767125 }, // 初期位置（東京駅周辺）
+                zoom: 14,
+            });
+            directionsService = new google.maps.DirectionsService();
+            directionsRenderer = new google.maps.DirectionsRenderer({
+                map: map,
+                suppressMarkers: true // デフォルトのA/Bピンを非表示にする場合はtrue
+            });
+        }
+
+        // ルートを検索し、50mおきにプロットする関数
+        function calculateAndPlotRoute() {
+            const origin = document.getElementById("origin").value;
+            const destination = document.getElementById("destination").value;
+            const travelMode = document.getElementById("travel-mode").value;
+            const resultBox = document.getElementById("result-box");
+
+            if (!origin || !destination) {
+                alert("出発地と目的地を入力してください。");
+                return;
+            }
+
+            resultBox.innerHTML = "計算中...<br>";
+            clearMarkers(); // 既存のピンをクリア
+
+            // Google Maps API でルートをリクエスト
+            directionsService.route({
+                origin: origin,
+                destination: destination,
+                travelMode: google.maps.TravelMode[travelMode]
+            }, (response, status) => {
+                if (status === "OK") {
+                    directionsRenderer.setDirections(response);
+                    
+                    // ルートの座標データ（Path）を抽出
+                    const route = response.routes[0];
+                    const pathCoordinates = [];
+                    
+                    // 各ステップ（曲がり角などの区間）の詳細な座標をすべて取得
+                    route.legs[0].steps.forEach(step => {
+                        step.path.forEach(latLng => {
+                            // Turf.jsは [経度, 緯度] の順序で扱うため変換
+                            pathCoordinates.push([latLng.lng(), latLng.lat()]);
+                        });
+                    });
+
+                    // Turf.js 用の LineString を作成
+                    const line = turf.lineString(pathCoordinates);
+                    
+                    // 全体の距離を計算（メートル単位）
+                    const totalDistance = turf.length(line, {units: 'meters'});
+                    
+                    let outputHtml = `総距離: ${Math.round(totalDistance)} メートル<br><br>`;
+
+                    // 50m間隔で座標を補間して取得
+                    const interval = 50; 
+                    for (let dist = 0; dist <= totalDistance; dist += interval) {
+                        // 指定距離(dist)進んだ地点の座標を取得
+                        const point = turf.along(line, dist, {units: 'meters'});
+                        const lng = point.geometry.coordinates[0];
+                        const lat = point.geometry.coordinates[1];
+
+                        // マップ上にピンを立てる
+                        const marker = new google.maps.Marker({
+                            position: { lat: lat, lng: lng },
+                            map: map,
+                            title: `${dist}m地点`,
+                            icon: {
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 4,
+                                fillColor: "#FF0000",
+                                fillOpacity: 1,
+                                strokeWeight: 1,
+                                strokeColor: "#FFF"
+                            }
+                        });
+                        markers.push(marker);
+
+                        // 結果を出力エリアに追加
+                        outputHtml += `${dist}m地点: 緯度 ${lat.toFixed(6)}, 経度 ${lng.toFixed(6)}<br>`;
+                    }
+
+                    resultBox.innerHTML = outputHtml;
+
+                } else {
+                    window.alert("ルートの取得に失敗しました: " + status);
+                }
+            });
+        }
+
+        // 立てたピンをすべて消去する関数
+        function clearMarkers() {
+            markers.forEach(marker => marker.setMap(null));
+            markers = [];
+        }
+    </script>
+
+    <!-- Google Maps API (YOUR_API_KEY を実際のAPIキーに変更してください) -->
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&callback=initMap"></script>
+</body>
+</html>
