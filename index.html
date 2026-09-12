@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>50m間隔ルートプロッター（保存機能付き）</title>
+    <title>任意間隔ルートプロッター（経由地注記付き）</title>
     <!-- Turf.js (空間計算用ライブラリ) -->
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; padding: 10px; display: flex; flex-direction: column; height: 100vh; }
         #controls { margin-bottom: 10px; padding: 15px; background: #f4f4f4; border-radius: 5px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
         .input-group { display: flex; flex-direction: column; gap: 5px; }
-        input[type="text"], textarea { padding: 5px; width: 250px; font-size: 14px; }
+        input[type="text"], textarea { padding: 5px; width: 220px; font-size: 14px; }
         textarea { height: 60px; resize: vertical; }
         button { padding: 8px 15px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; font-weight: bold; }
         button:hover { background: #0056b3; }
@@ -19,7 +19,7 @@
         .btn-success:hover { background: #218838; }
         #click-mode { background: #e9ecef; padding: 10px; border-radius: 5px; border: 1px solid #ccc; }
         #map { flex-grow: 1; width: 100%; border: 1px solid #ccc; min-height: 300px; }
-        #result-box { height: 150px; overflow-y: scroll; background: #222; color: #0f0; padding: 10px; font-family: monospace; font-size: 12px; margin-top: 10px; }
+        #result-box { height: 150px; overflow-y: scroll; background: #222; color: #0f0; padding: 10px; font-family: monospace; font-size: 12px; margin-top: 10px; white-space: pre-wrap; }
     </style>
 </head>
 <body>
@@ -49,6 +49,20 @@
             </select>
         </div>
 
+        <!-- プロット間隔の指定UIを追加 -->
+        <div class="input-group">
+            <label>プロット間隔:</label>
+            <div style="display: flex; gap: 5px; align-items: center;">
+                <select id="interval-select" style="padding: 5px;" onchange="toggleCustomInterval()">
+                    <option value="50">50mおき</option>
+                    <option value="100">100mおき</option>
+                    <option value="200">200mおき</option>
+                    <option value="custom">任意指定</option>
+                </select>
+                <input type="number" id="custom-interval" value="30" style="display: none; width: 70px;" placeholder="単位(m)">
+            </div>
+        </div>
+
         <div id="click-mode" class="input-group">
             <strong>📍地図クリックで入力:</strong>
             <label><input type="radio" name="click-target" value="origin" checked> 出発地にセット</label>
@@ -57,8 +71,7 @@
         </div>
 
         <div class="input-group" style="justify-content: flex-end; flex-direction: row; align-items: flex-end; gap: 10px;">
-            <button onclick="calculateAndPlotRoute()">ルート検索＆プロット</button>
-            <!-- ダウンロードボタン（初期状態は無効化） -->
+            <button onclick="calculateAndPlotRoute()">ルート計算＆プロット</button>
             <button id="download-btn" class="btn-success" onclick="downloadTxt()" disabled>TXTで保存</button>
         </div>
     </div>
@@ -66,7 +79,7 @@
     <div id="map"></div>
     
     <div id="result-box">
-        ここに50mごとの緯度経度が出力されます...<br>
+        ここに指定間隔ごとの緯度経度が出力されます...<br>
     </div>
 
     <script>
@@ -74,11 +87,11 @@
         let directionsService;
         let directionsRenderer;
         let markers = [];
-        let calculatedCoords = []; // ダウンロード用に座標を保持する配列
+        let calculatedCoords = []; 
 
         function initMap() {
             map = new google.maps.Map(document.getElementById("map"), {
-                center: { lat: 34.690, lng: 135.195 }, // 初期位置
+                center: { lat: 34.690, lng: 135.195 },
                 zoom: 13,
             });
             directionsService = new google.maps.DirectionsService();
@@ -106,6 +119,24 @@
             });
         }
 
+        function toggleCustomInterval() {
+            const select = document.getElementById("interval-select");
+            const customInput = document.getElementById("custom-interval");
+            if (select.value === "custom") {
+                customInput.style.display = "block";
+            } else {
+                customInput.style.display = "none";
+            }
+        }
+
+        function getIntervalValue() {
+            const select = document.getElementById("interval-select").value;
+            if (select === "custom") {
+                return parseFloat(document.getElementById("custom-interval").value);
+            }
+            return parseFloat(select);
+        }
+
         function calculateAndPlotRoute() {
             const origin = document.getElementById("origin").value;
             const destination = document.getElementById("destination").value;
@@ -113,9 +144,14 @@
             const travelMode = document.getElementById("travel-mode").value;
             const resultBox = document.getElementById("result-box");
             const downloadBtn = document.getElementById("download-btn");
+            const interval = getIntervalValue();
 
             if (!origin || !destination) {
                 alert("出発地と目的地を入力してください。");
+                return;
+            }
+            if (!interval || interval <= 0) {
+                alert("正しいプロット間隔を入力してください。");
                 return;
             }
 
@@ -131,8 +167,8 @@
 
             resultBox.innerHTML = "計算中...<br>";
             clearMarkers();
-            calculatedCoords = []; // 配列をリセット
-            downloadBtn.disabled = true; // ダウンロードボタンを無効化
+            calculatedCoords = []; 
+            downloadBtn.disabled = true; 
 
             const request = {
                 origin: origin,
@@ -146,44 +182,100 @@
                     directionsRenderer.setDirections(response);
                     
                     const route = response.routes[0];
-                    const pathCoordinates = [];
-                    
-                    route.legs.forEach(leg => {
+                    let accumulatedCoords = [];
+                    const keyPoints = []; // 始点・経由地・終点を保持する配列
+
+                    // [始点] を追加
+                    const startLoc = route.legs[0].start_location;
+                    keyPoints.push({
+                        dist: 0,
+                        lat: startLoc.lat(),
+                        lng: startLoc.lng(),
+                        label: '※始点'
+                    });
+
+                    // 各区間（Leg）の処理
+                    route.legs.forEach((leg, index) => {
                         leg.steps.forEach(step => {
                             step.path.forEach(latLng => {
-                                pathCoordinates.push([latLng.lng(), latLng.lat()]);
+                                accumulatedCoords.push([latLng.lng(), latLng.lat()]);
                             });
+                        });
+
+                        // ここまでのルートの距離を計算（経由地・終点の距離位置を特定するため）
+                        const lineUpToHere = turf.lineString(accumulatedCoords);
+                        const distUpToHere = turf.length(lineUpToHere, {units: 'meters'});
+                        
+                        // ラベルの設定（最後なら終点、それ以外は経由地）
+                        const labelText = (index === route.legs.length - 1) ? '※終点' : `※経由地${index + 1}`;
+                        const endLoc = leg.end_location;
+                        
+                        keyPoints.push({
+                            dist: distUpToHere,
+                            lat: endLoc.lat(),
+                            lng: endLoc.lng(),
+                            label: labelText
                         });
                     });
 
-                    const line = turf.lineString(pathCoordinates);
-                    const totalDistance = turf.length(line, {units: 'meters'});
-                    
-                    let outputHtml = `総距離: ${Math.round(totalDistance)} メートル<br><br>`;
+                    // 全体のルート線をTurf.js用に生成
+                    const fullLine = turf.lineString(accumulatedCoords);
+                    const totalDistance = turf.length(fullLine, {units: 'meters'});
+                    let outputPoints = [];
 
-                    const interval = 50; 
-                    for (let dist = 0; dist <= totalDistance; dist += interval) {
-                        const point = turf.along(line, dist, {units: 'meters'});
-                        const lng = point.geometry.coordinates[0];
-                        const lat = point.geometry.coordinates[1];
+                    // 【1】重要なポイント（始点・経由地・終点）を出力配列に追加
+                    keyPoints.forEach(kp => outputPoints.push(kp));
 
-                        const marker = new google.maps.Marker({
-                            position: { lat: lat, lng: lng },
-                            map: map,
-                            title: `${dist}m地点`,
-                            icon: { path: google.maps.SymbolPath.CIRCLE, scale: 4, fillColor: "#FF0000", fillOpacity: 1, strokeWeight: 1, strokeColor: "#FFF" }
-                        });
-                        markers.push(marker);
-
-                        // 画面表示用のテキスト
-                        outputHtml += `${dist}m地点: 緯度 ${lat.toFixed(6)}, 経度 ${lng.toFixed(6)}<br>`;
-                        
-                        // ダウンロード用の配列に「緯度,経度」の形式で追加
-                        calculatedCoords.push(`${lat.toFixed(6)},${lng.toFixed(6)}`);
+                    // 【2】指定間隔（50m等）のポイントを出力配列に追加
+                    for (let d = interval; d < totalDistance; d += interval) {
+                        // 重要なポイントと位置が完全に被った場合は重複を避ける
+                        const isDuplicate = keyPoints.some(kp => Math.abs(kp.dist - d) < 0.1);
+                        if (!isDuplicate) {
+                            const point = turf.along(fullLine, d, {units: 'meters'});
+                            outputPoints.push({
+                                dist: d,
+                                lat: point.geometry.coordinates[1],
+                                lng: point.geometry.coordinates[0],
+                                label: ''
+                            });
+                        }
                     }
 
-                    resultBox.innerHTML = outputHtml;
-                    downloadBtn.disabled = false; // 計算完了後にボタンを有効化
+                    // 【3】距離順（ルート順）に並び替える
+                    outputPoints.sort((a, b) => a.dist - b.dist);
+
+                    // 描画とデータ出力
+                    let outputHtml = `総距離: ${Math.round(totalDistance)} メートル\n\n`;
+
+                    outputPoints.forEach(pt => {
+                        const latStr = pt.lat.toFixed(6);
+                        const lngStr = pt.lng.toFixed(6);
+                        // ラベルがある場合はスペースを空けて追加
+                        const labelStr = pt.label ? ` ${pt.label}` : ''; 
+                        
+                        // 画面表示用
+                        outputHtml += `${Math.round(pt.dist)}m地点: ${latStr}, ${lngStr}${labelStr}\n`;
+                        
+                        // ダウンロード用（ご指定のフォーマット）
+                        calculatedCoords.push(`${latStr}, ${lngStr}${labelStr}`);
+
+                        // マーカーの設定（ラベル付きの重要な点は青色で大きく、等間隔の点は赤色で小さく）
+                        const iconColor = pt.label ? "#0000FF" : "#FF0000";
+                        const iconScale = pt.label ? 6 : 4;
+                        const zIndex = pt.label ? 100 : 1; // 重要な点が手前に来るように
+
+                        const marker = new google.maps.Marker({
+                            position: { lat: pt.lat, lng: pt.lng },
+                            map: map,
+                            title: pt.label ? pt.label : `${Math.round(pt.dist)}m地点`,
+                            zIndex: zIndex,
+                            icon: { path: google.maps.SymbolPath.CIRCLE, scale: iconScale, fillColor: iconColor, fillOpacity: 1, strokeWeight: 1, strokeColor: "#FFF" }
+                        });
+                        markers.push(marker);
+                    });
+
+                    resultBox.textContent = outputHtml;
+                    downloadBtn.disabled = false;
 
                 } else {
                     window.alert("ルートの取得に失敗しました: " + status);
@@ -191,27 +283,16 @@
             });
         }
 
-        // TXTファイルとしてダウンロードする関数
         function downloadTxt() {
             if (calculatedCoords.length === 0) return;
-
-            // 配列のデータを改行でつないで1つのテキストにする
             const textContent = calculatedCoords.join("\n");
-
-            // テキストデータをBlob（ファイルオブジェクト）に変換
             const blob = new Blob([textContent], { type: "text/plain" });
-
-            // ダウンロード用の仮のリンク要素を作成
             const link = document.createElement("a");
             link.href = URL.createObjectURL(blob);
-            link.download = "route_coordinates.txt"; // ダウンロード時のファイル名
-
-            // リンクをプログラムからクリックしてダウンロードを発火
+            link.download = "route_coordinates.txt";
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            
-            // メモリ解放
             URL.revokeObjectURL(link.href);
         }
 
